@@ -1,0 +1,111 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.optimize import curve_fit
+from scipy.special import gamma
+
+# Define the Poisson PMF explicitly
+def poisson(k, lamb):
+    return (lamb**k / gamma(k + 1)) * np.exp(-lamb)
+
+# Load the data
+df = pd.read_csv('/Users/willgray/Downloads/simulated_geiger_data.csv')
+
+# Parse the trials
+trials = {}
+for col in df.columns:
+    if col.startswith('Time (s)'):
+        trial_name = col.split('Time (s) ')[1].strip()
+        trials[trial_name] = {'time_col': col, 'counts_col': None}
+    elif col.startswith('Geiger Counts (counts/sample)'):
+        trial_name = col.split('Geiger Counts (counts/sample) ')[1].strip()
+        trials[trial_name] = {'time_col': None, 'counts_col': col}
+
+# Check for background data
+bg_trial = trials.get('background')
+if not bg_trial or not bg_trial['counts_col']:
+    raise ValueError("Background data missing or improperly formatted.")
+bg_counts = df[bg_trial['counts_col']].dropna()
+bg_mean = bg_counts.mean()
+
+# Fit Poisson distribution to background data
+bins = np.arange(0, np.ceil(bg_counts.max()) + 1, 1)
+background_hist, bin_edges = np.histogram(bg_counts, bins=bins, density=True)  # Normalized histogram
+bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+try:
+    popt, _ = curve_fit(poisson, bin_centers, background_hist, p0=[bg_mean])
+    lambda_bg_fit = popt[0]
+    print(f"Fitted lambda for background: {lambda_bg_fit:.2f}")
+except RuntimeError:
+    print("Failed to fit Poisson distribution for background")
+    lambda_bg_fit = None
+
+# Process each trial
+for trial_name in trials:
+    if trial_name == 'background':
+        continue
+    trial = trials[trial_name]
+    if not trial['counts_col']:
+        print(f"Skipping {trial_name} (missing counts column)")
+        continue
+    
+    # Use raw counts (no background subtraction)
+    counts_data = df[trial['counts_col']].dropna()
+    
+    # Compute histogram
+    max_val = counts_data.max()
+    bins = np.arange(0, np.ceil(max_val) + 1, 1)
+    hist, bin_edges = np.histogram(counts_data, bins=bins, density=True)  # Normalized histogram
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Center of each bin
+    
+    # Fit Poisson distribution to raw counts
+    try:
+        popt, _ = curve_fit(poisson, bin_centers, hist, p0=[counts_data.mean()])
+        lambda_fit = popt[0]
+        print(f"Fitted lambda for {trial_name}: {lambda_fit:.2f}")
+    except RuntimeError:
+        print(f"Failed to fit Poisson distribution for {trial_name}")
+        lambda_fit = None
+    
+    # Plot the histogram
+    plt.figure(figsize=(8, 4))
+    plt.hist(
+        counts_data,
+        bins=bins,
+        alpha=0.7,
+        color='skyblue',
+        edgecolor="navy",
+        density=True,  # Normalized histogram
+        label='Raw Counts'
+    )
+    
+    # Plot the fitted Poisson PMF
+    if lambda_fit is not None:
+        x_vals = np.linspace(0, max_val + 3, 300)
+        poisson_pmf = poisson(x_vals, lambda_fit)
+        
+        # Adjust for background if background fit was successful
+        if lambda_bg_fit is not None:
+            background_pmf = poisson(x_vals, lambda_bg_fit)
+            not_background = 1 - background_pmf
+            final_dist = not_background * poisson_pmf
+            final_dist /= np.sum(final_dist)  # Normalize the final distribution
+            plt.plot(x_vals, final_dist, 'r--', linewidth=2, label='Adjusted Poisson Fit')
+        
+        # Plot the original Poisson fit
+        plt.plot(x_vals, poisson_pmf, 'purple', linewidth=2, label=f'Poisson Fit (μ = {lambda_fit:.2f})')
+    
+    # Add labels, title, and legend
+    plt.xticks(
+        bins[:-1] + 0.5,  
+        [str(int(x)) for x in bins[:-1]]  
+    )
+    plt.xlabel("Counts per Time Interval")
+    plt.ylabel("Probability Density")
+    plt.title(f"Poisson Fit for {trial_name}\n(Background-Adjusted)")
+    plt.grid(axis='y', linestyle='--')
+    plt.xlim(left=0)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()

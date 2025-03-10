@@ -8,6 +8,10 @@ from scipy.special import gamma
 def poisson(k, lamb):
     return (lamb**k / gamma(k + 1)) * np.exp(-lamb)
 
+# Define the Gaussian function
+def gaussian(x, mu, sigma, A):
+    return A * np.exp(-(x - mu)**2 / (2 * sigma**2))
+
 # Load the data
 df = pd.read_csv('/Users/ashoch/Desktop/MCGILL/PHYS 258/Lab5/5Hz_data_will.csv')
 
@@ -25,27 +29,30 @@ for col in df.columns:
             trials[trial_name] = {'time_col': None, 'counts_col': col}
 
 # Check for background data
-bg_trial = trials.get('background')
+bg_trial = trials.get('Background 5Hz')
 if not bg_trial or not bg_trial['counts_col']:
     raise ValueError("Background data missing or improperly formatted.")
 bg_counts = df[bg_trial['counts_col']].dropna()
+print(len(bg_counts))
 
 # Fit Poisson distribution to background data
 bins = np.arange(0, np.ceil(bg_counts.max()) + 1, 1)
 background_hist, bin_edges = np.histogram(bg_counts, bins=bins, density=False)  # Non-normalized histogram
-bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Center of each bin
 
 try:
-    popt, _ = curve_fit(poisson, bin_centers, background_hist, p0=[bg_counts.mean()])
+    popt, pcov = curve_fit(poisson, bin_centers, background_hist, p0=[bg_counts.mean()])
     lambda_bg_fit = popt[0]
-    print(f"Fitted lambda for background: {lambda_bg_fit:.2f}")
+    lambda_bg_err = np.sqrt(pcov[0, 0])  # Uncertainty in lambda_bg
+    print(f"Fitted lambda for background: {lambda_bg_fit:.2f} ± {lambda_bg_err:.2f}")
 except RuntimeError:
     print("Failed to fit Poisson distribution for background")
     lambda_bg_fit = None
 
+
 # Process each trial
 for trial_name in trials:
-    if trial_name == 'background':
+    if trial_name == 'Background 5Hz':
         continue
     trial = trials[trial_name]
     if not trial['counts_col']:
@@ -54,52 +61,64 @@ for trial_name in trials:
     
     # Use raw counts (no background subtraction)
     counts_data = df[trial['counts_col']].dropna()
+    print(len(counts_data))
     
-    # Compute histogram
-    max_val = counts_data.max()
+    # Subtract the background array from the raw counts
+    if lambda_bg_fit is not None:
+        # Ensure the background array has the same length as the signal data
+        background_array = np.random.poisson(lambda_bg_fit, size=len(counts_data))
+        signal_data = counts_data - background_array
+        signal_data = np.clip(signal_data, 0, None)  # Ensure no negative values
+    else:
+        signal_data = counts_data  # If background fit failed, use raw counts
+    
+    # Compute histogram of the signal data
+    max_val = signal_data.max()
     bins = np.arange(0, np.ceil(max_val) + 3, 1)
-    hist, bin_edges = np.histogram(counts_data, bins=bins, density=False)  # Non-normalized histogram
+    hist, bin_edges = np.histogram(signal_data, bins=bins, density=False)  # Non-normalized histogram
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Center of each bin
     
-    # Fit Poisson distribution to raw counts
+    # Fit Poisson distribution to the signal data
     try:
-        popt, _ = curve_fit(poisson, bin_centers, hist, p0=[counts_data.mean()])
-        lambda_total_fit = popt[0]
-        print(f"Fitted lambda for {trial_name}: {lambda_total_fit:.2f}")
+        popt_poisson, pcov_poisson = curve_fit(poisson, bin_centers, hist, p0=[signal_data.mean()])
+        lambda_signal_fit = popt_poisson[0]
+        lambda_signal_err = np.sqrt(pcov_poisson[0, 0])  # Uncertainty in lambda_signal
+        print(f"Fitted lambda for signal in {trial_name}: {lambda_signal_fit:.2f} ± {lambda_signal_err:.2f}")
     except RuntimeError:
         print(f"Failed to fit Poisson distribution for {trial_name}")
-        lambda_total_fit = None
+        lambda_signal_fit = None
     
-    # Adjust for background if background fit was successful
-    if lambda_bg_fit is not None and lambda_total_fit is not None:
-        lambda_signal_fit = lambda_total_fit - lambda_bg_fit
-        if lambda_signal_fit < 0:
-            print(f"Warning: Negative signal rate for {trial_name}. Background may be too high.")
-            lambda_signal_fit = 0  # Set to 0 to avoid negative rates
-        print(f"Fitted lambda for signal in {trial_name}: {lambda_signal_fit:.2f}")
+    # Fit Gaussian distribution to the signal data
+    try:
+        popt_gaussian, pcov_gaussian = curve_fit(gaussian, bin_centers, hist, p0=[signal_data.mean(), signal_data.std(), max(hist)])
+        mu_fit, sigma_fit, A_fit = popt_gaussian
+        print(f"Fitted Gaussian for signal in {trial_name}: μ = {mu_fit:.2f}, σ = {sigma_fit:.2f}, A = {A_fit:.2f}")
+    except RuntimeError:
+        print(f"Failed to fit Gaussian distribution for {trial_name}")
+        mu_fit, sigma_fit, A_fit = None, None, None
     
-    # Plot the histogram
+    # Plot the histogram of the signal data
     plt.figure(figsize=(8, 4))
     plt.hist(
-        counts_data,
+        signal_data,
         bins=bins,
         alpha=0.7,
         color='skyblue',
         edgecolor="navy",
         density=False,  # Non-normalized histogram
-        label='Raw Counts'
+        label='Signal Counts'
     )
     
-    # Plot the fitted total Poisson distribution
-    if lambda_total_fit is not None:
+    # Plot the fitted Poisson distribution for the signal data
+    if lambda_signal_fit is not None:
         x_vals = np.linspace(0, max_val + 3, 300)
-        poisson_total = poisson(x_vals, lambda_total_fit) * np.sum(hist)  # Scale to match histogram counts
-        plt.plot(x_vals, poisson_total, 'purple', linewidth=2, label=f'Total Poisson Fit (μ = {lambda_total_fit:.2f})')
+        poisson_signal = poisson(x_vals, lambda_signal_fit) * len(counts_data)  # Scale to match histogram counts
+        plt.plot(x_vals, poisson_signal, 'r--', linewidth=2, label=f'Poisson Fit (μ = {lambda_signal_fit:.2f})')
     
-    # Plot the adjusted Poisson distribution (signal only)
-    if lambda_bg_fit is not None and lambda_total_fit is not None:
-        poisson_signal = poisson(x_vals, lambda_signal_fit) * np.sum(hist)  # Scale to match histogram counts
-        plt.plot(x_vals, poisson_signal, 'r--', linewidth=2, label=f'Signal Poisson Fit (μ = {lambda_signal_fit:.2f})')
+    # Plot the fitted Gaussian distribution for the signal data
+    if mu_fit is not None:
+        gaussian_signal = gaussian(x_vals, mu_fit, sigma_fit, A_fit)
+        plt.plot(x_vals, gaussian_signal, 'g-', linewidth=2, label=f'Gaussian Fit (μ = {mu_fit:.2f}, σ = {sigma_fit:.2f})')
     
     # Add labels, title, and legend
     plt.xticks(
@@ -108,7 +127,7 @@ for trial_name in trials:
     )
     plt.xlabel("Counts per Time Interval")
     plt.ylabel("Frequency")
-    plt.title(f"Poisson Fit for {trial_name}\n(Background-Adjusted)")
+    plt.title(f"Signal Counts for {trial_name}\n(Background-Subtracted)")
     plt.grid(axis='y', linestyle='--')
     plt.xlim(left=0)
     plt.legend()

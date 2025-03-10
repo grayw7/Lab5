@@ -90,7 +90,11 @@ for trial_name in trials:
             background_pmf = poisson(x_vals, lambda_bg_fit)
             not_background = 1 - background_pmf
             final_dist = not_background * poisson_pmf
-            final_dist /= np.sum(final_dist)  # Normalize the final distribution
+            
+            # Normalize the final distribution to match the histogram
+            bin_width = bins[1] - bins[0]
+            final_dist *= np.sum(hist) * bin_width / np.sum(final_dist)  # Scale to match histogram
+            
             plt.plot(x_vals, final_dist, 'r--', linewidth=2, label='Adjusted Poisson Fit')
         
         # Plot the original Poisson fit

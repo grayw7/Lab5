@@ -30,7 +30,7 @@ bg_mean = bg_counts.mean()
 
 # Fit Poisson distribution to background data
 bins = np.arange(0, np.ceil(bg_counts.max()) + 1, 1)
-background_hist, bin_edges = np.histogram(bg_counts, bins=bins, density=True)  # Normalized histogram
+background_hist, bin_edges = np.histogram(bg_counts, bins=bins, density=False)  # Non-normalized histogram
 bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
 try:
@@ -56,7 +56,7 @@ for trial_name in trials:
     # Compute histogram
     max_val = counts_data.max()
     bins = np.arange(0, np.ceil(max_val) + 1, 1)
-    hist, bin_edges = np.histogram(counts_data, bins=bins, density=True)  # Normalized histogram
+    hist, bin_edges = np.histogram(counts_data, bins=bins, density=False)  # Non-normalized histogram
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Center of each bin
     
     # Fit Poisson distribution to raw counts
@@ -76,7 +76,7 @@ for trial_name in trials:
         alpha=0.7,
         color='skyblue',
         edgecolor="navy",
-        density=True,  # Normalized histogram
+        density=False,  # Non-normalized histogram
         label='Raw Counts'
     )
     
@@ -91,14 +91,16 @@ for trial_name in trials:
             not_background = 1 - background_pmf
             final_dist = not_background * poisson_pmf
             
-            # Normalize the final distribution to match the histogram
-            bin_width = bins[1] - bins[0]
-            final_dist *= np.sum(hist) * bin_width / np.sum(final_dist)  # Scale to match histogram
+            # Normalize the adjusted distribution
+            final_dist /= np.sum(final_dist)  # Ensure it sums to 1
             
-            plt.plot(x_vals, final_dist, 'r--', linewidth=2, label='Adjusted Poisson Fit')
+            # Scale the adjusted distribution to match the histogram counts
+            final_dist_scaled = final_dist * np.sum(hist)
+            
+            plt.plot(x_vals, final_dist_scaled, 'r--', linewidth=2, label='Adjusted Poisson Fit')
         
-        # Plot the original Poisson fit
-        plt.plot(x_vals, poisson_pmf, 'purple', linewidth=2, label=f'Poisson Fit (μ = {lambda_fit:.2f})')
+        # Plot the original Poisson fit (scaled to match histogram counts)
+        plt.plot(x_vals, poisson_pmf * np.sum(hist), 'purple', linewidth=2, label=f'Poisson Fit (μ = {lambda_fit:.2f})')
     
     # Add labels, title, and legend
     plt.xticks(
@@ -106,7 +108,7 @@ for trial_name in trials:
         [str(int(x)) for x in bins[:-1]]  
     )
     plt.xlabel("Counts per Time Interval")
-    plt.ylabel("Probability Density")
+    plt.ylabel("Frequency")
     plt.title(f"Poisson Fit for {trial_name}\n(Background-Adjusted)")
     plt.grid(axis='y', linestyle='--')
     plt.xlim(left=0)
